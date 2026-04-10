@@ -13,6 +13,7 @@ Ejemplos de tareas válidas para MVP:
 - “Busca el documento donde hablé de X.”
 - “Crea un evento mañana a las 3 pm.”
 - “Abre un issue en GitHub con este resumen.”
+- “¿Qué clima hace en Ciudad de México?”
 - “Lanza un workflow interno para generar un reporte.”
 - “Programa una tarea larga y avísame cuando termine.”
 
@@ -60,6 +61,7 @@ La mejor forma de construirlo con ese stack es esta:
   - Calendar
   - Email
   - GitHub
+  - Open-Meteo (weather)
   - Internal workflows
   - Restricted shell
 ```

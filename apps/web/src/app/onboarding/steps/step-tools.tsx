@@ -50,6 +50,13 @@ const AVAILABLE_TOOLS = [
     risk: "medium" as const,
     requiresIntegration: "github",
   },
+  {
+    id: "get_weather",
+    name: "Clima actual",
+    description: "Consulta el clima actual de cualquier ciudad vía Open-Meteo.",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
 ];
 
 const RISK_LABELS = {

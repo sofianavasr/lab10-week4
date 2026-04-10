@@ -19,6 +19,7 @@ const TOOL_IDS = [
   "github_list_issues",
   "github_create_issue",
   "github_create_repo",
+  "get_weather",
 ];
 
 export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected }: Props) {

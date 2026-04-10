@@ -78,6 +78,19 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["name"],
     },
   },
+  {
+    id: "get_weather",
+    name: "get_weather",
+    description: "Gets the current weather for a given city using the Open-Meteo API.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        city: { type: "string", description: "City name to get the weather for" },
+      },
+      required: ["city"],
+    },
+  },
 ];
 
 export function getToolRisk(toolId: string): ToolRisk {

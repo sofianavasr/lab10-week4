@@ -241,5 +241,61 @@ export function buildLangChainTools(ctx: ToolContext) {
     );
   }
 
+  if (isToolAvailable("get_weather", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "get_weather", input, false
+          );
+
+          const geoRes = await fetch(
+            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(input.city)}&count=1&language=en`
+          );
+          if (!geoRes.ok) {
+            const body = await geoRes.text().catch(() => "");
+            const err = { error: `Geocoding API ${geoRes.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const geoData = await geoRes.json();
+          if (!geoData.results?.length) {
+            const err = { error: `No location found for "${input.city}"` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+
+          const { latitude, longitude, name, country } = geoData.results[0];
+
+          const weatherRes = await fetch(
+            `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,wind_speed_10m,weather_code`
+          );
+          if (!weatherRes.ok) {
+            const body = await weatherRes.text().catch(() => "");
+            const err = { error: `Weather API ${weatherRes.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const weatherData = await weatherRes.json();
+
+          const result = {
+            location: { name, country, latitude, longitude },
+            current: weatherData.current,
+            current_units: weatherData.current_units,
+          };
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
+        },
+        {
+          name: "get_weather",
+          description: "Gets the current weather for a given city using the Open-Meteo API.",
+          schema: z.object({
+            city: z.string(),
+          }),
+        }
+      )
+    );
+  }
+
   return tools;
 }

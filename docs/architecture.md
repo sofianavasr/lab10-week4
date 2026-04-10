@@ -116,6 +116,11 @@ Tablas: `profiles`, `user_integrations`, `user_tool_settings`, `agent_sessions`,
 
 Todas con **RLS habilitado** y políticas por `user_id` desde el día 1.
 
+## APIs externas
+
+- **GitHub**: REST API v3 con token OAuth del usuario. Requiere integración activa (`user_integrations.provider = 'github'`).
+- **Open-Meteo**: API pública de clima, sin API key. Se usa el endpoint de geocoding (`geocoding-api.open-meteo.com/v1/search`) para resolver el nombre de ciudad a coordenadas y el endpoint de forecast (`api.open-meteo.com/v1/forecast`) para obtener el clima actual (temperatura, humedad, sensación térmica, viento, código de clima).
+
 ## Seguridad
 
 - **RLS** en toda tabla con datos de usuario.

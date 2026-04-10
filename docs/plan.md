@@ -38,6 +38,7 @@ Construir un agente que permita a un usuario **gestionar tareas y ejecutar accio
 - '[ ]' Tools internas: `get_user_preferences`, `list_enabled_tools`
 - '[ ]' Tools GitHub (stub): `github_list_repos`, `github_list_issues`, `github_create_issue, github_create_repo`
 - '[ ]' `github_create_issue` con riesgo "medium" → genera `pending_confirmation`
+- '[ ]' Tool clima: `get_weather` vía Open-Meteo API (geocoding + forecast, sin API key)
 - '[ ]' Tabla `tool_calls` para tracking de estado
 
 ### Fase 5: Telegram
