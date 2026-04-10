@@ -62,6 +62,22 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["owner", "repo", "title"],
     },
   },
+  {
+    id: "github_create_repo",
+    name: "github_create_repo",
+    description: "Creates a new GitHub repository for the authenticated user. Requires confirmation.",
+    risk: "medium",
+    requires_integration: "github",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Repository name" },
+        description: { type: "string", description: "Repository description" },
+        is_private: { type: "boolean", description: "Whether the repo is private" },
+      },
+      required: ["name"],
+    },
+  },
 ];
 
 export function getToolRisk(toolId: string): ToolRisk {

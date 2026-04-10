@@ -9,6 +9,7 @@ interface Props {
   profile: Record<string, unknown> | null;
   toolSettings: Array<{ tool_id: string; enabled: boolean }>;
   telegramLinked: boolean;
+  githubConnected: boolean;
 }
 
 const TOOL_IDS = [
@@ -17,9 +18,10 @@ const TOOL_IDS = [
   "github_list_repos",
   "github_list_issues",
   "github_create_issue",
+  "github_create_repo",
 ];
 
-export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: Props) {
+export function SettingsForm({ userId, profile, toolSettings, telegramLinked, githubConnected }: Props) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -33,6 +35,7 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
     toolSettings.filter((t) => t.enabled).map((t) => t.tool_id)
   );
   const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [disconnectingGitHub, setDisconnectingGitHub] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,6 +73,13 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+    router.refresh();
+  }
+
+  async function handleDisconnectGitHub() {
+    setDisconnectingGitHub(true);
+    await fetch("/api/github/disconnect", { method: "POST" });
+    setDisconnectingGitHub(false);
     router.refresh();
   }
 
@@ -141,6 +151,35 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
             </label>
           ))}
         </div>
+      </section>
+
+      {/* GitHub */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold">GitHub</h2>
+        {githubConnected ? (
+          <div className="space-y-2">
+            <p className="text-sm text-green-600">Cuenta de GitHub conectada.</p>
+            <button
+              onClick={handleDisconnectGitHub}
+              disabled={disconnectingGitHub}
+              className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:hover:bg-red-900/20"
+            >
+              {disconnectingGitHub ? "Desconectando..." : "Desconectar GitHub"}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-neutral-500">
+              Conecta tu cuenta de GitHub para que el agente pueda acceder a tus repositorios e issues.
+            </p>
+            <a
+              href="/api/github/authorize"
+              className="inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+            >
+              Conectar GitHub
+            </a>
+          </div>
+        )}
       </section>
 
       {/* Telegram */}

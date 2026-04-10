@@ -11,6 +11,7 @@ interface ToolContext {
   sessionId: string;
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
+  githubToken?: string;
 }
 
 function isToolAvailable(
@@ -28,6 +29,16 @@ function isToolAvailable(
     if (!hasIntegration) return false;
   }
   return true;
+}
+
+const GH_API = "https://api.github.com";
+
+function ghHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
 }
 
 export function buildLangChainTools(ctx: ToolContext) {
@@ -77,10 +88,33 @@ export function buildLangChainTools(ctx: ToolContext) {
     tools.push(
       tool(
         async (input) => {
+          if (!ctx.githubToken) {
+            return JSON.stringify({ error: "GitHub token not available" });
+          }
           const record = await createToolCall(
             ctx.db, ctx.sessionId, "github_list_repos", input, false
           );
-          const result = { message: "GitHub repos would be listed here (stub)", repos: [] };
+          const res = await fetch(
+            `${GH_API}/user/repos?sort=updated&per_page=${input.per_page}`,
+            { headers: ghHeaders(ctx.githubToken) }
+          );
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            const err = { error: `GitHub API ${res.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const repos = await res.json();
+          const result = {
+            repos: repos.map((r: Record<string, unknown>) => ({
+              full_name: r.full_name,
+              html_url: r.html_url,
+              description: r.description,
+              private: r.private,
+              language: r.language,
+              updated_at: r.updated_at,
+            })),
+          };
           await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
@@ -99,10 +133,33 @@ export function buildLangChainTools(ctx: ToolContext) {
     tools.push(
       tool(
         async (input) => {
+          if (!ctx.githubToken) {
+            return JSON.stringify({ error: "GitHub token not available" });
+          }
           const record = await createToolCall(
             ctx.db, ctx.sessionId, "github_list_issues", input, false
           );
-          const result = { message: `Issues for ${input.owner}/${input.repo} (stub)`, issues: [] };
+          const res = await fetch(
+            `${GH_API}/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/issues?state=${input.state}`,
+            { headers: ghHeaders(ctx.githubToken) }
+          );
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            const err = { error: `GitHub API ${res.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const issues = await res.json();
+          const result = {
+            issues: issues.map((i: Record<string, unknown>) => ({
+              number: i.number,
+              title: i.title,
+              html_url: i.html_url,
+              state: i.state,
+              created_at: i.created_at,
+              user: (i.user as Record<string, unknown> | null)?.login ?? null,
+            })),
+          };
           await updateToolCallStatus(ctx.db, record.id, "executed", result);
           return JSON.stringify(result);
         },
@@ -131,12 +188,12 @@ export function buildLangChainTools(ctx: ToolContext) {
             return JSON.stringify({
               pending_confirmation: true,
               tool_call_id: record.id,
-              message: `I need your confirmation to create issue "${input.title}" in ${input.owner}/${input.repo}.`,
+              tool_name: "github_create_issue",
+              arguments: input,
+              message: `Necesito tu confirmación para crear el issue "${input.title}" en ${input.owner}/${input.repo}.`,
             });
           }
-          const result = { message: "Issue created (stub)", issue_url: "#" };
-          await updateToolCallStatus(ctx.db, record.id, "executed", result);
-          return JSON.stringify(result);
+          return JSON.stringify({ error: "Unexpected: confirmation should be required" });
         },
         {
           name: "github_create_issue",
@@ -146,6 +203,38 @@ export function buildLangChainTools(ctx: ToolContext) {
             repo: z.string(),
             title: z.string(),
             body: z.string().optional().default(""),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("github_create_repo", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("github_create_repo");
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "github_create_repo", input, needsConfirm
+          );
+          if (needsConfirm) {
+            return JSON.stringify({
+              pending_confirmation: true,
+              tool_call_id: record.id,
+              tool_name: "github_create_repo",
+              arguments: input,
+              message: `Necesito tu confirmación para crear el repositorio "${input.name}"${input.is_private ? " (privado)" : " (público)"}.`,
+            });
+          }
+          return JSON.stringify({ error: "Unexpected: confirmation should be required" });
+        },
+        {
+          name: "github_create_repo",
+          description: "Creates a new GitHub repository for the authenticated user. Requires confirmation.",
+          schema: z.object({
+            name: z.string(),
+            description: z.string().optional().default(""),
+            is_private: z.boolean().optional().default(false),
           }),
         }
       )

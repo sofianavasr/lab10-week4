@@ -82,3 +82,10 @@ export interface ToolDefinition {
   requires_integration?: string;
   parameters_schema: Record<string, unknown>;
 }
+
+export interface PendingConfirmation {
+  tool_call_id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+  message: string;
+}

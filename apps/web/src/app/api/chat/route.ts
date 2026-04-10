@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServerClient } from "@agents/db";
 import { runAgent } from "@agents/agent";
+import { decrypt } from "@/lib/crypto";
 
 export async function POST(request: Request) {
   try {
@@ -34,6 +35,18 @@ export async function POST(request: Request) {
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "active");
+
+    let githubToken: string | undefined;
+    const ghIntegration = (integrations ?? []).find(
+      (i: Record<string, unknown>) => i.provider === "github"
+    );
+    if (ghIntegration?.encrypted_tokens) {
+      try {
+        githubToken = decrypt(ghIntegration.encrypted_tokens as string);
+      } catch {
+        // token decryption failed, proceed without it
+      }
+    }
 
     let session = await supabase
       .from("agent_sessions")
@@ -86,15 +99,12 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      githubToken,
     });
 
-    const pendingConfirmation = result.response.includes("pending_confirmation")
-      ? JSON.parse(result.response)
-      : null;
-
     return NextResponse.json({
-      response: pendingConfirmation ? null : result.response,
-      pendingConfirmation,
+      response: result.pendingConfirmation ? null : result.response,
+      pendingConfirmation: result.pendingConfirmation ?? null,
       toolCalls: result.toolCalls,
     });
   } catch (error) {
