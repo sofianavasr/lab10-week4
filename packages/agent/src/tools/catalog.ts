@@ -62,6 +62,67 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["owner", "repo", "title"],
     },
   },
+  {
+    id: "github_create_repo",
+    name: "github_create_repo",
+    description: "Creates a new GitHub repository for the authenticated user. Requires confirmation.",
+    risk: "medium",
+    requires_integration: "github",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Repository name" },
+        description: { type: "string", description: "Repository description" },
+        is_private: { type: "boolean", description: "Whether the repo is private" },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    id: "notion_get_idea_tags",
+    name: "notion_get_idea_tags",
+    description:
+      "Fetches available tags from the user's Notion ideas database so the user can pick one existing tag or ask to create a new one.",
+    risk: "low",
+    requires_integration: "notion",
+    parameters_schema: { type: "object", properties: {}, required: [] },
+  },
+  {
+    id: "notion_create_idea",
+    name: "notion_create_idea",
+    description:
+      "Creates a new idea page in the user's Notion ideas database. Ask for Name, let the user pick one Tag (or create a new tag), ask optional Inspired by URL, and always set Status to Idea.",
+    risk: "low",
+    requires_integration: "notion",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Idea title (required)" },
+        tag: {
+          type: "string",
+          description: "Single tag to assign (existing or new)",
+        },
+        inspired_by: {
+          type: "string",
+          description: "Optional inspiration URL",
+        },
+      },
+      required: ["name"],
+    },
+  },
+  {
+    id: "get_weather",
+    name: "get_weather",
+    description: "Gets the current weather for a given city using the Open-Meteo API.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        city: { type: "string", description: "City name to get the weather for" },
+      },
+      required: ["city"],
+    },
+  },
 ];
 
 export function getToolRisk(toolId: string): ToolRisk {

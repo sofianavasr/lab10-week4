@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServerClient } from "@agents/db";
 import { runAgent } from "@agents/agent";
+import { decrypt } from "@/lib/crypto";
 
 export async function POST(request: Request) {
   try {
@@ -34,6 +35,36 @@ export async function POST(request: Request) {
       .select("*")
       .eq("user_id", user.id)
       .eq("status", "active");
+
+    let githubToken: string | undefined;
+    const ghIntegration = (integrations ?? []).find(
+      (i: Record<string, unknown>) => i.provider === "github"
+    );
+    if (ghIntegration?.encrypted_tokens) {
+      try {
+        githubToken = decrypt(ghIntegration.encrypted_tokens as string);
+      } catch {
+        // token decryption failed, proceed without it
+      }
+    }
+
+    let notionToken: string | undefined;
+    const notionIntegration = (integrations ?? []).find(
+      (i: Record<string, unknown>) => i.provider === "notion"
+    );
+    console.log("[chat] notion integration found:", !!notionIntegration, "status:", notionIntegration?.status);
+    if (notionIntegration?.encrypted_tokens) {
+      try {
+        const decrypted = decrypt(notionIntegration.encrypted_tokens as string);
+        const parsed = JSON.parse(decrypted) as { access_token?: string };
+        notionToken = parsed.access_token;
+        console.log("[chat] notion token decrypted successfully, has access_token:", !!notionToken);
+      } catch (err) {
+        console.log("[chat] notion token decryption/parsing failed:", err);
+      }
+    } else {
+      console.log("[chat] notion integration has no encrypted_tokens");
+    }
 
     let session = await supabase
       .from("agent_sessions")
@@ -86,15 +117,13 @@ export async function POST(request: Request) {
         status: i.status as "active" | "revoked" | "expired",
         created_at: i.created_at as string,
       })),
+      githubToken,
+      notionToken,
     });
 
-    const pendingConfirmation = result.response.includes("pending_confirmation")
-      ? JSON.parse(result.response)
-      : null;
-
     return NextResponse.json({
-      response: pendingConfirmation ? null : result.response,
-      pendingConfirmation,
+      response: result.pendingConfirmation ? null : result.response,
+      pendingConfirmation: result.pendingConfirmation ?? null,
       toolCalls: result.toolCalls,
     });
   } catch (error) {

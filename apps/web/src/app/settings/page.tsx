@@ -24,6 +24,22 @@ export default async function SettingsPage() {
     .eq("user_id", user.id)
     .single();
 
+  const { data: githubIntegration } = await supabase
+    .from("user_integrations")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("provider", "github")
+    .eq("status", "active")
+    .single();
+
+  const { data: notionIntegration } = await supabase
+    .from("user_integrations")
+    .select("*")
+    .eq("user_id", user.id)
+    .eq("provider", "notion")
+    .eq("status", "active")
+    .single();
+
   return (
     <div className="min-h-screen">
       <header className="border-b border-neutral-200 px-4 py-3 dark:border-neutral-800">
@@ -43,6 +59,8 @@ export default async function SettingsPage() {
           profile={profile}
           toolSettings={toolSettings ?? []}
           telegramLinked={!!telegramAccount}
+          githubConnected={!!githubIntegration}
+          notionConnected={!!notionIntegration}
         />
       </main>
     </div>

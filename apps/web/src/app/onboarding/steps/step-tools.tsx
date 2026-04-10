@@ -43,6 +43,34 @@ const AVAILABLE_TOOLS = [
     risk: "medium" as const,
     requiresIntegration: "github",
   },
+  {
+    id: "github_create_repo",
+    name: "GitHub: crear repositorio",
+    description: "Crea un repositorio nuevo (requiere confirmación).",
+    risk: "medium" as const,
+    requiresIntegration: "github",
+  },
+  {
+    id: "notion_get_idea_tags",
+    name: "Notion: listar etiquetas",
+    description: "Lista las etiquetas disponibles en tu base de datos de ideas de Notion.",
+    risk: "low" as const,
+    requiresIntegration: "notion",
+  },
+  {
+    id: "notion_create_idea",
+    name: "Notion: crear idea",
+    description: "Registra una idea en tu base de datos de ideas de Notion.",
+    risk: "low" as const,
+    requiresIntegration: "notion",
+  },
+  {
+    id: "get_weather",
+    name: "Clima actual",
+    description: "Consulta el clima actual de cualquier ciudad vía Open-Meteo.",
+    risk: "low" as const,
+    requiresIntegration: null,
+  },
 ];
 
 const RISK_LABELS = {

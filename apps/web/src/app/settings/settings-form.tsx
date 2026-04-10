@@ -9,6 +9,8 @@ interface Props {
   profile: Record<string, unknown> | null;
   toolSettings: Array<{ tool_id: string; enabled: boolean }>;
   telegramLinked: boolean;
+  githubConnected: boolean;
+  notionConnected: boolean;
 }
 
 const TOOL_IDS = [
@@ -17,9 +19,20 @@ const TOOL_IDS = [
   "github_list_repos",
   "github_list_issues",
   "github_create_issue",
+  "github_create_repo",
+  "notion_get_idea_tags",
+  "notion_create_idea",
+  "get_weather",
 ];
 
-export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: Props) {
+export function SettingsForm({
+  userId,
+  profile,
+  toolSettings,
+  telegramLinked,
+  githubConnected,
+  notionConnected,
+}: Props) {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -33,6 +46,8 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
     toolSettings.filter((t) => t.enabled).map((t) => t.tool_id)
   );
   const [linkCode, setLinkCode] = useState<string | null>(null);
+  const [disconnectingGitHub, setDisconnectingGitHub] = useState(false);
+  const [disconnectingNotion, setDisconnectingNotion] = useState(false);
 
   const supabase = createBrowserClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -70,6 +85,20 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
     setSaving(false);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+    router.refresh();
+  }
+
+  async function handleDisconnectGitHub() {
+    setDisconnectingGitHub(true);
+    await fetch("/api/github/disconnect", { method: "POST" });
+    setDisconnectingGitHub(false);
+    router.refresh();
+  }
+
+  async function handleDisconnectNotion() {
+    setDisconnectingNotion(true);
+    await fetch("/api/notion/disconnect", { method: "POST" });
+    setDisconnectingNotion(false);
     router.refresh();
   }
 
@@ -141,6 +170,64 @@ export function SettingsForm({ userId, profile, toolSettings, telegramLinked }: 
             </label>
           ))}
         </div>
+      </section>
+
+      {/* GitHub */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold">GitHub</h2>
+        {githubConnected ? (
+          <div className="space-y-2">
+            <p className="text-sm text-green-600">Cuenta de GitHub conectada.</p>
+            <button
+              onClick={handleDisconnectGitHub}
+              disabled={disconnectingGitHub}
+              className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:hover:bg-red-900/20"
+            >
+              {disconnectingGitHub ? "Desconectando..." : "Desconectar GitHub"}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-neutral-500">
+              Conecta tu cuenta de GitHub para que el agente pueda acceder a tus repositorios e issues.
+            </p>
+            <a
+              href="/api/github/authorize"
+              className="inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+            >
+              Conectar GitHub
+            </a>
+          </div>
+        )}
+      </section>
+
+      {/* Notion */}
+      <section className="space-y-4">
+        <h2 className="text-base font-semibold">Notion</h2>
+        {notionConnected ? (
+          <div className="space-y-2">
+            <p className="text-sm text-green-600">Cuenta de Notion conectada.</p>
+            <button
+              onClick={handleDisconnectNotion}
+              disabled={disconnectingNotion}
+              className="rounded-md border border-red-300 px-3 py-1.5 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-700 dark:hover:bg-red-900/20"
+            >
+              {disconnectingNotion ? "Desconectando..." : "Desconectar Notion"}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-neutral-500">
+              Conecta tu cuenta de Notion para que el agente pueda registrar ideas en tu base de datos.
+            </p>
+            <a
+              href="/api/notion/authorize"
+              className="inline-block rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-800 dark:bg-white dark:text-neutral-900 dark:hover:bg-neutral-200"
+            >
+              Conectar Notion
+            </a>
+          </div>
+        )}
       </section>
 
       {/* Telegram */}

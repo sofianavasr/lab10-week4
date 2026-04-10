@@ -81,7 +81,10 @@ Next.js carga `.env*` desde el directorio de la app **`apps/web`**, no desde la 
    | `OPENROUTER_API_KEY` | Clave de OpenRouter |
    | `TELEGRAM_BOT_TOKEN` | *(Opcional)* Token del bot |
    | `TELEGRAM_WEBHOOK_SECRET` | *(Opcional)* Secreto que Telegram enviará en cabecera; debe coincidir con el configurado al registrar el webhook |
-   | `OAUTH_ENCRYPTION_KEY` | Reservado para cifrado de tokens OAuth en el futuro; puedes dejar un placeholder hasta integrar proveedores |
+   | `NOTION_CLIENT_ID` | *(Opcional)* Client ID de tu integración pública de Notion |
+   | `NOTION_CLIENT_SECRET` | *(Opcional)* Client Secret de tu integración pública de Notion |
+   | `NOTION_DATABASE_ID` | *(Opcional)* ID de la base de datos de ideas en Notion |
+   | `OAUTH_ENCRYPTION_KEY` | Clave (64 hex chars) usada para cifrar tokens OAuth de proveedores (por ejemplo GitHub y Notion) |
 
 Referencia de nombres: [.env.example](.env.example).
 
@@ -139,6 +142,21 @@ Telegram **exige HTTPS** para webhooks. En local:
 6. En Telegram, envía al bot: `/link TU_CODIGO` (el código que te muestra la web).
 
 Después de vincular, los mensajes al bot usan el mismo pipeline que el chat web.
+
+---
+
+## Paso 9 — Notion (opcional)
+
+Para que el agente pueda crear ideas en tu base de Notion:
+
+1. Crea una integración pública en [Notion Integrations](https://www.notion.so/profile/integrations).
+2. Configura el Redirect URI como `http://localhost:3000/api/notion/callback` (o tu URL de despliegue + `/api/notion/callback`).
+3. Copia **Client ID** y **Client Secret** en `apps/web/.env.local` como `NOTION_CLIENT_ID` y `NOTION_CLIENT_SECRET`.
+4. Configura `NOTION_DATABASE_ID` con el ID de tu base de datos objetivo.
+5. En la web, entra a **Ajustes** y haz clic en **Conectar Notion**.
+6. Autoriza el acceso y selecciona la página/base que compartirás con la integración.
+
+Con eso, el agente podrá leer las etiquetas disponibles y crear nuevas ideas en Notion.
 
 ---
 
