@@ -28,6 +28,8 @@ agents/
 │           │   └── api/
 │           │       ├── chat/           # POST → runAgent
 │           │       ├── auth/signout/   # POST → signout
+│           │       ├── github/         # OAuth GitHub (authorize/callback/disconnect)
+│           │       ├── notion/         # OAuth Notion (authorize/callback/disconnect)
 │           │       └── telegram/
 │           │           ├── webhook/    # POST → bot Telegram
 │           │           └── setup/      # GET → registrar webhook
@@ -119,6 +121,7 @@ Todas con **RLS habilitado** y políticas por `user_id` desde el día 1.
 ## APIs externas
 
 - **GitHub**: REST API v3 con token OAuth del usuario. Requiere integración activa (`user_integrations.provider = 'github'`).
+- **Notion**: REST API con token OAuth del usuario. Se usa `GET /v1/databases/{id}` para leer etiquetas disponibles y `POST /v1/pages` para crear ideas en la base objetivo.
 - **Open-Meteo**: API pública de clima, sin API key. Se usa el endpoint de geocoding (`geocoding-api.open-meteo.com/v1/search`) para resolver el nombre de ciudad a coordenadas y el endpoint de forecast (`api.open-meteo.com/v1/forecast`) para obtener el clima actual (temperatura, humedad, sensación térmica, viento, código de clima).
 
 ## Seguridad
@@ -126,7 +129,7 @@ Todas con **RLS habilitado** y políticas por `user_id` desde el día 1.
 - **RLS** en toda tabla con datos de usuario.
 - **Allowlist de tools**: solo se montan las que el usuario habilitó en onboarding/ajustes Y para las que tiene integración activa.
 - **Confirmación humana**: tools de riesgo medio/alto generan `pending_confirmation` en lugar de ejecutar. En web se muestra prompt; en Telegram, botones inline.
-- **Tokens OAuth**: campo `encrypted_tokens` en `user_integrations` (cifrado en aplicación).
+- **Tokens OAuth**: campo `encrypted_tokens` en `user_integrations` (cifrado en aplicación), incluyendo GitHub y Notion.
 - **Budget**: `budget_tokens_limit` por sesión para evitar costes descontrolados.
 
 ## Canales

@@ -48,6 +48,24 @@ export async function POST(request: Request) {
       }
     }
 
+    let notionToken: string | undefined;
+    const notionIntegration = (integrations ?? []).find(
+      (i: Record<string, unknown>) => i.provider === "notion"
+    );
+    console.log("[chat] notion integration found:", !!notionIntegration, "status:", notionIntegration?.status);
+    if (notionIntegration?.encrypted_tokens) {
+      try {
+        const decrypted = decrypt(notionIntegration.encrypted_tokens as string);
+        const parsed = JSON.parse(decrypted) as { access_token?: string };
+        notionToken = parsed.access_token;
+        console.log("[chat] notion token decrypted successfully, has access_token:", !!notionToken);
+      } catch (err) {
+        console.log("[chat] notion token decryption/parsing failed:", err);
+      }
+    } else {
+      console.log("[chat] notion integration has no encrypted_tokens");
+    }
+
     let session = await supabase
       .from("agent_sessions")
       .select("*")
@@ -100,6 +118,7 @@ export async function POST(request: Request) {
         created_at: i.created_at as string,
       })),
       githubToken,
+      notionToken,
     });
 
     return NextResponse.json({

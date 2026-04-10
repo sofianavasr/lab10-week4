@@ -12,6 +12,7 @@ interface ToolContext {
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
   githubToken?: string;
+  notionToken?: string;
 }
 
 function isToolAvailable(
@@ -32,12 +33,22 @@ function isToolAvailable(
 }
 
 const GH_API = "https://api.github.com";
+const NOTION_API = "https://api.notion.com";
+const NOTION_VERSION = "2026-03-11";
 
 function ghHeaders(token: string): Record<string, string> {
   return {
     Authorization: `Bearer ${token}`,
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
+  };
+}
+
+function notionHeaders(token: string): Record<string, string> {
+  return {
+    Authorization: `Bearer ${token}`,
+    "Notion-Version": NOTION_VERSION,
+    "Content-Type": "application/json",
   };
 }
 
@@ -235,6 +246,170 @@ export function buildLangChainTools(ctx: ToolContext) {
             name: z.string(),
             description: z.string().optional().default(""),
             is_private: z.boolean().optional().default(false),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_get_idea_tags", ctx)) {
+    tools.push(
+      tool(
+        async () => {
+          if (!ctx.notionToken) {
+            console.log("[notion_get_idea_tags] no notion token in context");
+            return JSON.stringify({ error: "Notion token not available" });
+          }
+          const databaseId = process.env.NOTION_DATABASE_ID;
+          if (!databaseId) {
+            console.log("[notion_get_idea_tags] NOTION_DATABASE_ID not set");
+            return JSON.stringify({ error: "NOTION_DATABASE_ID is not configured" });
+          }
+
+          console.log("[notion_get_idea_tags] fetching data source:", databaseId, "with Notion-Version:", NOTION_VERSION);
+
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "notion_get_idea_tags",
+            {},
+            false
+          );
+
+          const res = await fetch(
+            `${NOTION_API}/v1/data_sources/${encodeURIComponent(databaseId)}`,
+            { headers: notionHeaders(ctx.notionToken) }
+          );
+          console.log("[notion_get_idea_tags] Notion API response status:", res.status);
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.log("[notion_get_idea_tags] Notion API error body:", body);
+            const err = { error: `Notion API ${res.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+
+          const database = (await res.json()) as {
+            properties?: Record<
+              string,
+              {
+                type?: string;
+                select?: { options?: Array<{ name?: string; color?: string }> };
+                multi_select?: { options?: Array<{ name?: string; color?: string }> };
+              }
+            >;
+          };
+          const properties = database.properties ?? {};
+          const tagProperty =
+            properties.Tags ??
+            Object.values(properties).find(
+              (p) => p?.type === "select" || p?.type === "multi_select"
+            );
+          const options =
+            tagProperty?.select?.options ?? tagProperty?.multi_select?.options ?? [];
+
+          const result = {
+            tags: options
+              .filter((o) => typeof o?.name === "string")
+              .map((o) => ({
+                name: o.name as string,
+                color: o.color ?? "default",
+              })),
+          };
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
+        },
+        {
+          name: "notion_get_idea_tags",
+          description:
+            "Fetches available tags from the Notion ideas database so the user can pick existing tags or ask to create one.",
+          schema: z.object({}),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("notion_create_idea", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          if (!ctx.notionToken) {
+            console.log("[notion_create_idea] no notion token in context");
+            return JSON.stringify({ error: "Notion token not available" });
+          }
+          const databaseId = process.env.NOTION_DATABASE_ID;
+          if (!databaseId) {
+            console.log("[notion_create_idea] NOTION_DATABASE_ID not set");
+            return JSON.stringify({ error: "NOTION_DATABASE_ID is not configured" });
+          }
+
+          console.log("[notion_create_idea] creating page in database:", databaseId, "input:", JSON.stringify(input));
+
+          const record = await createToolCall(
+            ctx.db,
+            ctx.sessionId,
+            "notion_create_idea",
+            input,
+            false
+          );
+
+          const properties: Record<string, unknown> = {
+            Name: {
+              title: [{ text: { content: input.name } }],
+            },
+            Status: {
+              status: { name: "Idea" },
+            },
+          };
+
+          if (input.tag) {
+            properties.Tags = {
+              select: { name: input.tag },
+            };
+          }
+          if (input.inspired_by) {
+            properties["Inspired by"] = { url: input.inspired_by };
+          }
+
+          const res = await fetch(`${NOTION_API}/v1/pages`, {
+            method: "POST",
+            headers: notionHeaders(ctx.notionToken),
+            body: JSON.stringify({
+              parent: { data_source_id: databaseId },
+              icon: { type: "emoji", emoji: "🧿" },
+              properties,
+            }),
+          });
+          console.log("[notion_create_idea] Notion API response status:", res.status);
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            console.log("[notion_create_idea] Notion API error body:", body);
+            const err = { error: `Notion API ${res.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+
+          const page = (await res.json()) as { id?: string; url?: string };
+          const result = {
+            id: page.id ?? null,
+            url: page.url ?? null,
+            status: "Idea",
+            icon: "🧿",
+            name: input.name,
+            tag: input.tag ?? null,
+            inspired_by: input.inspired_by ?? null,
+          };
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
+        },
+        {
+          name: "notion_create_idea",
+          description:
+            "Creates a new idea in the Notion database. Always sets Status to Idea and uses the 🧿 icon.",
+          schema: z.object({
+            name: z.string().min(1),
+            tag: z.string().min(1).optional(),
+            inspired_by: z.string().optional(),
           }),
         }
       )

@@ -312,6 +312,20 @@ export async function POST(request: Request) {
     }
   }
 
+  let notionToken: string | undefined;
+  const notionIntegration = (integrations ?? []).find(
+    (i: Record<string, unknown>) => i.provider === "notion"
+  );
+  if (notionIntegration?.encrypted_tokens) {
+    try {
+      const decrypted = decrypt(notionIntegration.encrypted_tokens as string);
+      const parsed = JSON.parse(decrypted) as { access_token?: string };
+      notionToken = parsed.access_token;
+    } catch {
+      // decryption/parsing failed, proceed without it
+    }
+  }
+
   try {
     const result = await runAgent({
       message: text,
@@ -335,6 +349,7 @@ export async function POST(request: Request) {
         created_at: i.created_at as string,
       })),
       githubToken,
+      notionToken,
     });
 
     if (result.pendingConfirmation) {

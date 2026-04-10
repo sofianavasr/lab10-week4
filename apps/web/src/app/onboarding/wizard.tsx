@@ -72,6 +72,9 @@ export function OnboardingWizard({ userId, initialProfile, initialToolSettings }
       "github_list_issues",
       "github_create_issue",
       "github_create_repo",
+      "notion_get_idea_tags",
+      "notion_create_idea",
+      "get_weather",
     ];
 
     for (const toolId of TOOL_IDS) {

@@ -30,6 +30,7 @@ export interface AgentInput {
   enabledTools: UserToolSetting[];
   integrations: UserIntegration[];
   githubToken?: string;
+  notionToken?: string;
 }
 
 export interface AgentOutput {
@@ -41,7 +42,17 @@ export interface AgentOutput {
 const MAX_TOOL_ITERATIONS = 6;
 
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
-  const { message, userId, sessionId, systemPrompt, db, enabledTools, integrations, githubToken } = input;
+  const {
+    message,
+    userId,
+    sessionId,
+    systemPrompt,
+    db,
+    enabledTools,
+    integrations,
+    githubToken,
+    notionToken,
+  } = input;
 
   const model = createChatModel();
   const lcTools = buildLangChainTools({
@@ -51,6 +62,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     enabledTools,
     integrations,
     githubToken,
+    notionToken,
   });
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
