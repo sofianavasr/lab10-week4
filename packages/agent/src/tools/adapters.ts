@@ -1,5 +1,6 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
+import { interrupt } from "@langchain/langgraph";
 import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { TOOL_CATALOG, toolRequiresConfirmation } from "./catalog";
@@ -191,20 +192,47 @@ export function buildLangChainTools(ctx: ToolContext) {
     tools.push(
       tool(
         async (input) => {
+          if (!ctx.githubToken) {
+            return JSON.stringify({ error: "GitHub token not available" });
+          }
           const needsConfirm = toolRequiresConfirmation("github_create_issue");
           const record = await createToolCall(
             ctx.db, ctx.sessionId, "github_create_issue", input, needsConfirm
           );
           if (needsConfirm) {
-            return JSON.stringify({
-              pending_confirmation: true,
+            const decision = interrupt({
               tool_call_id: record.id,
               tool_name: "github_create_issue",
               arguments: input,
               message: `Necesito tu confirmación para crear el issue "${input.title}" en ${input.owner}/${input.repo}.`,
             });
+            if (decision === "reject") {
+              await updateToolCallStatus(ctx.db, record.id, "rejected");
+              return JSON.stringify({ rejected: true, message: "Acción cancelada por el usuario." });
+            }
           }
-          return JSON.stringify({ error: "Unexpected: confirmation should be required" });
+          const res = await fetch(
+            `${GH_API}/repos/${encodeURIComponent(input.owner)}/${encodeURIComponent(input.repo)}/issues`,
+            {
+              method: "POST",
+              headers: { ...ghHeaders(ctx.githubToken), "Content-Type": "application/json" },
+              body: JSON.stringify({ title: input.title, body: input.body }),
+            }
+          );
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            const err = { error: `GitHub API ${res.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const issue = await res.json();
+          const result = {
+            message: `Issue creado: ${issue.title}`,
+            issue_url: issue.html_url,
+            issue_number: issue.number,
+          };
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
         },
         {
           name: "github_create_issue",
@@ -224,20 +252,48 @@ export function buildLangChainTools(ctx: ToolContext) {
     tools.push(
       tool(
         async (input) => {
+          if (!ctx.githubToken) {
+            return JSON.stringify({ error: "GitHub token not available" });
+          }
           const needsConfirm = toolRequiresConfirmation("github_create_repo");
           const record = await createToolCall(
             ctx.db, ctx.sessionId, "github_create_repo", input, needsConfirm
           );
           if (needsConfirm) {
-            return JSON.stringify({
-              pending_confirmation: true,
+            const decision = interrupt({
               tool_call_id: record.id,
               tool_name: "github_create_repo",
               arguments: input,
               message: `Necesito tu confirmación para crear el repositorio "${input.name}"${input.is_private ? " (privado)" : " (público)"}.`,
             });
+            if (decision === "reject") {
+              await updateToolCallStatus(ctx.db, record.id, "rejected");
+              return JSON.stringify({ rejected: true, message: "Acción cancelada por el usuario." });
+            }
           }
-          return JSON.stringify({ error: "Unexpected: confirmation should be required" });
+          const res = await fetch(`${GH_API}/user/repos`, {
+            method: "POST",
+            headers: { ...ghHeaders(ctx.githubToken), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              name: input.name,
+              description: input.description,
+              private: input.is_private,
+              auto_init: true,
+            }),
+          });
+          if (!res.ok) {
+            const body = await res.text().catch(() => "");
+            const err = { error: `GitHub API ${res.status}: ${body}` };
+            await updateToolCallStatus(ctx.db, record.id, "failed", err);
+            return JSON.stringify(err);
+          }
+          const repo = await res.json();
+          const result = {
+            message: `Repositorio creado: ${repo.full_name}`,
+            repo_url: repo.html_url,
+          };
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
         },
         {
           name: "github_create_repo",

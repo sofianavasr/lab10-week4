@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@agents/db";
-import { runAgent } from "@agents/agent";
+import { runAgent, resumeAgent } from "@agents/agent";
 import { decrypt } from "@/lib/crypto";
-import { githubCreateIssue, githubCreateRepo } from "@/lib/github";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET ?? "";
@@ -61,65 +60,89 @@ async function answerCallbackQuery(callbackQueryId: string, text: string) {
   });
 }
 
-async function executeToolCall(
+function buildAgentContext(
   db: ReturnType<typeof createServerClient>,
-  toolCall: Record<string, unknown>,
+  userId: string,
+  sessionId: string,
+  profile: Record<string, unknown> | null,
+  toolSettings: Record<string, unknown>[],
+  integrations: Record<string, unknown>[],
+  githubToken: string | undefined,
+  notionToken: string | undefined
+) {
+  return {
+    userId,
+    sessionId,
+    systemPrompt: (profile?.agent_system_prompt as string) ?? "Eres un asistente útil.",
+    db,
+    enabledTools: toolSettings.map((t) => ({
+      id: t.id as string,
+      user_id: t.user_id as string,
+      tool_id: t.tool_id as string,
+      enabled: t.enabled as boolean,
+      config_json: (t.config_json as Record<string, unknown>) ?? {},
+    })),
+    integrations: integrations.map((i) => ({
+      id: i.id as string,
+      user_id: i.user_id as string,
+      provider: i.provider as string,
+      scopes: (i.scopes as string[]) ?? [],
+      status: i.status as "active" | "revoked" | "expired",
+      created_at: i.created_at as string,
+    })),
+    githubToken,
+    notionToken,
+  };
+}
+
+async function fetchUserContext(
+  db: ReturnType<typeof createServerClient>,
   userId: string
-): Promise<string> {
-  const { data: integration } = await db
-    .from("user_integrations")
-    .select("encrypted_tokens")
-    .eq("user_id", userId)
-    .eq("provider", "github")
-    .eq("status", "active")
+) {
+  const { data: profile } = await db
+    .from("profiles")
+    .select("agent_system_prompt")
+    .eq("id", userId)
     .single();
 
-  if (!integration?.encrypted_tokens) {
-    return "Error: GitHub no está conectado.";
+  const { data: toolSettings } = await db
+    .from("user_tool_settings")
+    .select("*")
+    .eq("user_id", userId);
+
+  const { data: integrations } = await db
+    .from("user_integrations")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("status", "active");
+
+  let githubToken: string | undefined;
+  const ghIntegration = (integrations ?? []).find(
+    (i: Record<string, unknown>) => i.provider === "github"
+  );
+  if (ghIntegration?.encrypted_tokens) {
+    try {
+      githubToken = decrypt(ghIntegration.encrypted_tokens as string);
+    } catch {
+      // decryption failed
+    }
   }
 
-  const token = decrypt(integration.encrypted_tokens as string);
-  const args = toolCall.arguments_json as Record<string, unknown>;
-
-  switch (toolCall.tool_name) {
-    case "github_create_issue": {
-      const issue = await githubCreateIssue(
-        token,
-        args.owner as string,
-        args.repo as string,
-        args.title as string,
-        (args.body as string) ?? ""
-      );
-      await db
-        .from("tool_calls")
-        .update({
-          status: "executed",
-          result_json: { issue_url: issue.html_url, issue_number: issue.number },
-          finished_at: new Date().toISOString(),
-        })
-        .eq("id", toolCall.id);
-      return `Issue creado: ${issue.title}\n${issue.html_url}`;
+  let notionToken: string | undefined;
+  const notionIntegration = (integrations ?? []).find(
+    (i: Record<string, unknown>) => i.provider === "notion"
+  );
+  if (notionIntegration?.encrypted_tokens) {
+    try {
+      const decrypted = decrypt(notionIntegration.encrypted_tokens as string);
+      const parsed = JSON.parse(decrypted) as { access_token?: string };
+      notionToken = parsed.access_token;
+    } catch {
+      // decryption/parsing failed
     }
-    case "github_create_repo": {
-      const repo = await githubCreateRepo(
-        token,
-        args.name as string,
-        (args.description as string) ?? "",
-        (args.is_private as boolean) ?? false
-      );
-      await db
-        .from("tool_calls")
-        .update({
-          status: "executed",
-          result_json: { repo_url: repo.html_url },
-          finished_at: new Date().toISOString(),
-        })
-        .eq("id", toolCall.id);
-      return `Repositorio creado: ${repo.full_name}\n${repo.html_url}`;
-    }
-    default:
-      return `Herramienta no soportada: ${toolCall.tool_name}`;
   }
+
+  return { profile, toolSettings: toolSettings ?? [], integrations: integrations ?? [], githubToken, notionToken };
 }
 
 export async function POST(request: Request) {
@@ -135,7 +158,7 @@ export async function POST(request: Request) {
     const cb = update.callback_query;
     const [action, toolCallId] = cb.data.split(":");
 
-    if (action === "approve" && toolCallId) {
+    if ((action === "approve" || action === "reject") && toolCallId) {
       const { data: toolCall } = await db
         .from("tool_calls")
         .select("*, agent_sessions!inner(user_id)")
@@ -149,28 +172,30 @@ export async function POST(request: Request) {
       }
 
       const userId = (toolCall.agent_sessions as Record<string, unknown>).user_id as string;
-      await answerCallbackQuery(cb.id, "Aprobado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción aprobada. Ejecutando...");
+      const sessionId = toolCall.session_id as string;
+
+      await answerCallbackQuery(cb.id, action === "approve" ? "Aprobado" : "Rechazado");
+
+      if (action === "reject") {
+        await sendTelegramMessage(cb.message.chat.id, "Acción cancelada.");
+      }
 
       try {
-        const resultMsg = await executeToolCall(db, toolCall, userId);
-        await sendTelegramMessage(cb.message.chat.id, resultMsg);
+        const ctx = await fetchUserContext(db, userId);
+        const result = await resumeAgent({
+          message: "",
+          ...buildAgentContext(
+            db, userId, sessionId,
+            ctx.profile, ctx.toolSettings, ctx.integrations,
+            ctx.githubToken, ctx.notionToken
+          ),
+          resumeAction: action as "approve" | "reject",
+        });
+        await sendTelegramMessage(cb.message.chat.id, result.response);
       } catch (err) {
         console.error("Tool execution error:", err);
-        await db
-          .from("tool_calls")
-          .update({ status: "failed", finished_at: new Date().toISOString() })
-          .eq("id", toolCallId);
         await sendTelegramMessage(cb.message.chat.id, "Error al ejecutar la acción.");
       }
-    } else if (action === "reject" && toolCallId) {
-      await db
-        .from("tool_calls")
-        .update({ status: "rejected", finished_at: new Date().toISOString() })
-        .eq("id", toolCallId)
-        .eq("status", "pending_confirmation");
-      await answerCallbackQuery(cb.id, "Rechazado");
-      await sendTelegramMessage(cb.message.chat.id, "Acción cancelada.");
     }
 
     return NextResponse.json({ ok: true });
@@ -283,73 +308,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  const { data: profile } = await db
-    .from("profiles")
-    .select("agent_system_prompt")
-    .eq("id", userId)
-    .single();
-
-  const { data: toolSettings } = await db
-    .from("user_tool_settings")
-    .select("*")
-    .eq("user_id", userId);
-
-  const { data: integrations } = await db
-    .from("user_integrations")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("status", "active");
-
-  let githubToken: string | undefined;
-  const ghIntegration = (integrations ?? []).find(
-    (i: Record<string, unknown>) => i.provider === "github"
-  );
-  if (ghIntegration?.encrypted_tokens) {
-    try {
-      githubToken = decrypt(ghIntegration.encrypted_tokens as string);
-    } catch {
-      // decryption failed, proceed without it
-    }
-  }
-
-  let notionToken: string | undefined;
-  const notionIntegration = (integrations ?? []).find(
-    (i: Record<string, unknown>) => i.provider === "notion"
-  );
-  if (notionIntegration?.encrypted_tokens) {
-    try {
-      const decrypted = decrypt(notionIntegration.encrypted_tokens as string);
-      const parsed = JSON.parse(decrypted) as { access_token?: string };
-      notionToken = parsed.access_token;
-    } catch {
-      // decryption/parsing failed, proceed without it
-    }
-  }
+  const ctx = await fetchUserContext(db, userId);
 
   try {
     const result = await runAgent({
       message: text,
-      userId,
-      sessionId: session.id,
-      systemPrompt: profile?.agent_system_prompt ?? "Eres un asistente útil.",
-      db,
-      enabledTools: (toolSettings ?? []).map((t: Record<string, unknown>) => ({
-        id: t.id as string,
-        user_id: t.user_id as string,
-        tool_id: t.tool_id as string,
-        enabled: t.enabled as boolean,
-        config_json: (t.config_json as Record<string, unknown>) ?? {},
-      })),
-      integrations: (integrations ?? []).map((i: Record<string, unknown>) => ({
-        id: i.id as string,
-        user_id: i.user_id as string,
-        provider: i.provider as string,
-        scopes: (i.scopes as string[]) ?? [],
-        status: i.status as "active" | "revoked" | "expired",
-        created_at: i.created_at as string,
-      })),
-      githubToken,
-      notionToken,
+      ...buildAgentContext(
+        db, userId, session.id,
+        ctx.profile, ctx.toolSettings, ctx.integrations,
+        ctx.githubToken, ctx.notionToken
+      ),
     });
 
     if (result.pendingConfirmation) {
