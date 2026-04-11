@@ -1,4 +1,5 @@
-import { StateGraph, Annotation, MemorySaver, Command } from "@langchain/langgraph";
+import { StateGraph, Annotation, Command } from "@langchain/langgraph";
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import {
   HumanMessage,
   AIMessage,
@@ -42,7 +43,23 @@ export interface AgentOutput {
 
 const MAX_TOOL_ITERATIONS = 6;
 
-const checkpointer = new MemorySaver();
+// Track the thread_id used for interrupted sessions so resume can find the checkpoint
+const interruptedThreadIds = new Map<string, string>();
+
+let _checkpointerPromise: Promise<PostgresSaver> | null = null;
+
+function getCheckpointer(): Promise<PostgresSaver> {
+  if (!_checkpointerPromise) {
+    _checkpointerPromise = (async () => {
+      const dbUrl = process.env.DATABASE_URL;
+      if (!dbUrl) throw new Error("DATABASE_URL is required for checkpoint persistence");
+      const saver = PostgresSaver.fromConnString(dbUrl);
+      await saver.setup();
+      return saver;
+    })();
+  }
+  return _checkpointerPromise;
+}
 
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const {
@@ -125,11 +142,21 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     })
     .addEdge("tools", "agent");
 
-  const app = graph.compile({ checkpointer });
+  const checkpointer = await getCheckpointer();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const app = graph.compile({ checkpointer: checkpointer as any });
 
-  const config = { configurable: { thread_id: sessionId } };
+  // For resume: use the stored thread_id from the interrupted invocation.
+  // For new messages: use a unique thread_id so stale checkpoint state isn't merged
+  // with DB-reconstructed messages (which lack tool_calls metadata).
+  const threadId = resumeAction
+    ? (interruptedThreadIds.get(sessionId) ?? sessionId)
+    : `${sessionId}-${Date.now()}`;
+  const config = { configurable: { thread_id: threadId } };
 
   if (resumeAction) {
+    interruptedThreadIds.delete(sessionId);
+
     const finalState = await app.invoke(
       new Command({ resume: resumeAction }),
       config
@@ -146,6 +173,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         .find((i) => i.value)?.value as PendingConfirmation | undefined;
 
       if (interruptValue) {
+        interruptedThreadIds.set(sessionId, threadId);
         await addMessage(db, sessionId, "assistant", interruptValue.message);
         return {
           response: interruptValue.message,
@@ -196,6 +224,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
       .find((i) => i.value)?.value as PendingConfirmation | undefined;
 
     if (interruptValue) {
+      interruptedThreadIds.set(sessionId, threadId);
       await addMessage(db, sessionId, "assistant", interruptValue.message);
       return {
         response: interruptValue.message,
