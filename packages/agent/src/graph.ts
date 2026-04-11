@@ -1,4 +1,5 @@
-import { StateGraph, Annotation, MemorySaver } from "@langchain/langgraph";
+import { StateGraph, Annotation, Command } from "@langchain/langgraph";
+import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import {
   HumanMessage,
   AIMessage,
@@ -31,6 +32,7 @@ export interface AgentInput {
   integrations: UserIntegration[];
   githubToken?: string;
   notionToken?: string;
+  resumeAction?: "approve" | "reject";
 }
 
 export interface AgentOutput {
@@ -40,6 +42,24 @@ export interface AgentOutput {
 }
 
 const MAX_TOOL_ITERATIONS = 6;
+
+// Track the thread_id used for interrupted sessions so resume can find the checkpoint
+const interruptedThreadIds = new Map<string, string>();
+
+let _checkpointerPromise: Promise<PostgresSaver> | null = null;
+
+function getCheckpointer(): Promise<PostgresSaver> {
+  if (!_checkpointerPromise) {
+    _checkpointerPromise = (async () => {
+      const dbUrl = process.env.DATABASE_URL;
+      if (!dbUrl) throw new Error("DATABASE_URL is required for checkpoint persistence");
+      const saver = PostgresSaver.fromConnString(dbUrl);
+      await saver.setup();
+      return saver;
+    })();
+  }
+  return _checkpointerPromise;
+}
 
 export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   const {
@@ -52,6 +72,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     integrations,
     githubToken,
     notionToken,
+    resumeAction,
   } = input;
 
   const model = createChatModel();
@@ -67,17 +88,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
 
-  const history = await getSessionMessages(db, sessionId, 30);
-  const priorMessages: BaseMessage[] = history.map((m) => {
-    if (m.role === "user") return new HumanMessage(m.content);
-    if (m.role === "assistant") return new AIMessage(m.content);
-    return new HumanMessage(m.content);
-  });
-
-  await addMessage(db, sessionId, "user", message);
-
   const toolCallNames: string[] = [];
-  let pendingConfirmation: PendingConfirmation | undefined;
 
   async function agentNode(
     state: typeof GraphState.State
@@ -104,28 +115,12 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
         const result = await (matchingTool as any).invoke(tc.args);
         const resultStr = String(result);
         results.push(new ToolMessage({ content: resultStr, tool_call_id: tc.id! }));
-
-        try {
-          const parsed = JSON.parse(resultStr);
-          if (parsed.pending_confirmation) {
-            pendingConfirmation = {
-              tool_call_id: parsed.tool_call_id,
-              tool_name: parsed.tool_name,
-              arguments: parsed.arguments,
-              message: parsed.message,
-            };
-          }
-        } catch {
-          // not JSON, ignore
-        }
       }
     }
     return { messages: results };
   }
 
   function shouldContinue(state: typeof GraphState.State): string {
-    if (pendingConfirmation) return "end";
-
     const lastMsg = state.messages[state.messages.length - 1];
     if (lastMsg instanceof AIMessage && lastMsg.tool_calls?.length) {
       const iterations = state.messages.filter(
@@ -147,8 +142,65 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
     })
     .addEdge("tools", "agent");
 
-  const checkpointer = new MemorySaver();
-  const app = graph.compile({ checkpointer });
+  const checkpointer = await getCheckpointer();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const app = graph.compile({ checkpointer: checkpointer as any });
+
+  // For resume: use the stored thread_id from the interrupted invocation.
+  // For new messages: use a unique thread_id so stale checkpoint state isn't merged
+  // with DB-reconstructed messages (which lack tool_calls metadata).
+  const threadId = resumeAction
+    ? (interruptedThreadIds.get(sessionId) ?? sessionId)
+    : `${sessionId}-${Date.now()}`;
+  const config = { configurable: { thread_id: threadId } };
+
+  if (resumeAction) {
+    interruptedThreadIds.delete(sessionId);
+
+    const finalState = await app.invoke(
+      new Command({ resume: resumeAction }),
+      config
+    );
+
+    const snapshot = await app.getState(config);
+    const interrupted = snapshot.tasks.some(
+      (t) => t.interrupts && t.interrupts.length > 0
+    );
+
+    if (interrupted) {
+      const interruptValue = snapshot.tasks
+        .flatMap((t) => t.interrupts ?? [])
+        .find((i) => i.value)?.value as PendingConfirmation | undefined;
+
+      if (interruptValue) {
+        interruptedThreadIds.set(sessionId, threadId);
+        await addMessage(db, sessionId, "assistant", interruptValue.message);
+        return {
+          response: interruptValue.message,
+          toolCalls: toolCallNames,
+          pendingConfirmation: interruptValue,
+        };
+      }
+    }
+
+    const lastMessage = finalState.messages[finalState.messages.length - 1];
+    const responseText =
+      typeof lastMessage.content === "string"
+        ? lastMessage.content
+        : JSON.stringify(lastMessage.content);
+
+    await addMessage(db, sessionId, "assistant", responseText);
+    return { response: responseText, toolCalls: toolCallNames };
+  }
+
+  const history = await getSessionMessages(db, sessionId, 30);
+  const priorMessages: BaseMessage[] = history.map((m) => {
+    if (m.role === "user") return new HumanMessage(m.content);
+    if (m.role === "assistant") return new AIMessage(m.content);
+    return new HumanMessage(m.content);
+  });
+
+  await addMessage(db, sessionId, "user", message);
 
   const initialMessages: BaseMessage[] = [
     new SystemMessage(systemPrompt),
@@ -158,16 +210,28 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
   const finalState = await app.invoke(
     { messages: initialMessages, sessionId, userId, systemPrompt },
-    { configurable: { thread_id: sessionId } }
+    config
   );
 
-  if (pendingConfirmation) {
-    await addMessage(db, sessionId, "assistant", pendingConfirmation.message);
-    return {
-      response: pendingConfirmation.message,
-      toolCalls: toolCallNames,
-      pendingConfirmation,
-    };
+  const snapshot = await app.getState(config);
+  const interrupted = snapshot.tasks.some(
+    (t) => t.interrupts && t.interrupts.length > 0
+  );
+
+  if (interrupted) {
+    const interruptValue = snapshot.tasks
+      .flatMap((t) => t.interrupts ?? [])
+      .find((i) => i.value)?.value as PendingConfirmation | undefined;
+
+    if (interruptValue) {
+      interruptedThreadIds.set(sessionId, threadId);
+      await addMessage(db, sessionId, "assistant", interruptValue.message);
+      return {
+        response: interruptValue.message,
+        toolCalls: toolCallNames,
+        pendingConfirmation: interruptValue,
+      };
+    }
   }
 
   const lastMessage = finalState.messages[finalState.messages.length - 1];
@@ -179,4 +243,8 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   await addMessage(db, sessionId, "assistant", responseText);
 
   return { response: responseText, toolCalls: toolCallNames };
+}
+
+export async function resumeAgent(input: AgentInput): Promise<AgentOutput> {
+  return runAgent(input);
 }

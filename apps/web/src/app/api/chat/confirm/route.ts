@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createServerClient } from "@agents/db";
+import { resumeAgent } from "@agents/agent";
 import { decrypt } from "@/lib/crypto";
-import { githubCreateIssue, githubCreateRepo } from "@/lib/github";
 
 export async function POST(request: Request) {
   try {
@@ -35,73 +35,81 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    if (action === "reject") {
-      await db
-        .from("tool_calls")
-        .update({ status: "rejected", finished_at: new Date().toISOString() })
-        .eq("id", toolCallId);
-      return NextResponse.json({ status: "rejected", message: "Acción cancelada." });
-    }
+    const sessionId = toolCall.session_id as string;
 
-    const { data: integration } = await db
-      .from("user_integrations")
-      .select("encrypted_tokens")
-      .eq("user_id", user.id)
-      .eq("provider", "github")
-      .eq("status", "active")
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("agent_system_prompt")
+      .eq("id", user.id)
       .single();
 
-    if (!integration?.encrypted_tokens) {
-      return NextResponse.json({ error: "GitHub not connected" }, { status: 400 });
+    const { data: toolSettings } = await supabase
+      .from("user_tool_settings")
+      .select("*")
+      .eq("user_id", user.id);
+
+    const { data: integrations } = await supabase
+      .from("user_integrations")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("status", "active");
+
+    let githubToken: string | undefined;
+    const ghIntegration = (integrations ?? []).find(
+      (i: Record<string, unknown>) => i.provider === "github"
+    );
+    if (ghIntegration?.encrypted_tokens) {
+      try {
+        githubToken = decrypt(ghIntegration.encrypted_tokens as string);
+      } catch {
+        // token decryption failed
+      }
     }
 
-    const token = decrypt(integration.encrypted_tokens);
-    const args = toolCall.arguments_json as Record<string, unknown>;
-    let result: Record<string, unknown>;
-
-    switch (toolCall.tool_name) {
-      case "github_create_issue": {
-        const issue = await githubCreateIssue(
-          token,
-          args.owner as string,
-          args.repo as string,
-          args.title as string,
-          (args.body as string) ?? ""
-        );
-        result = {
-          message: `Issue creado: ${issue.title}`,
-          issue_url: issue.html_url,
-          issue_number: issue.number,
-        };
-        break;
+    let notionToken: string | undefined;
+    const notionIntegration = (integrations ?? []).find(
+      (i: Record<string, unknown>) => i.provider === "notion"
+    );
+    if (notionIntegration?.encrypted_tokens) {
+      try {
+        const decrypted = decrypt(notionIntegration.encrypted_tokens as string);
+        const parsed = JSON.parse(decrypted) as { access_token?: string };
+        notionToken = parsed.access_token;
+      } catch {
+        // token decryption/parsing failed
       }
-      case "github_create_repo": {
-        const repo = await githubCreateRepo(
-          token,
-          args.name as string,
-          (args.description as string) ?? "",
-          (args.is_private as boolean) ?? false
-        );
-        result = {
-          message: `Repositorio creado: ${repo.full_name}`,
-          repo_url: repo.html_url,
-        };
-        break;
-      }
-      default:
-        result = { error: `Unknown tool: ${toolCall.tool_name}` };
     }
 
-    await db
-      .from("tool_calls")
-      .update({
-        status: "executed",
-        result_json: result,
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", toolCallId);
+    const result = await resumeAgent({
+      message: "",
+      userId: user.id,
+      sessionId,
+      systemPrompt: (profile?.agent_system_prompt as string) ?? "Eres un asistente útil.",
+      db,
+      enabledTools: (toolSettings ?? []).map((t: Record<string, unknown>) => ({
+        id: t.id as string,
+        user_id: t.user_id as string,
+        tool_id: t.tool_id as string,
+        enabled: t.enabled as boolean,
+        config_json: (t.config_json as Record<string, unknown>) ?? {},
+      })),
+      integrations: (integrations ?? []).map((i: Record<string, unknown>) => ({
+        id: i.id as string,
+        user_id: i.user_id as string,
+        provider: i.provider as string,
+        scopes: (i.scopes as string[]) ?? [],
+        status: i.status as "active" | "revoked" | "expired",
+        created_at: i.created_at as string,
+      })),
+      githubToken,
+      notionToken,
+      resumeAction: action,
+    });
 
-    return NextResponse.json({ status: "executed", result });
+    return NextResponse.json({
+      status: action === "approve" ? "executed" : "rejected",
+      result: { message: result.response },
+    });
   } catch (error) {
     console.error("Confirm API error:", error);
     return NextResponse.json(
