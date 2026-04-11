@@ -23,6 +23,7 @@ const TOOL_IDS = [
   "notion_get_idea_tags",
   "notion_create_idea",
   "get_weather",
+  "bash",
 ];
 
 export function SettingsForm({

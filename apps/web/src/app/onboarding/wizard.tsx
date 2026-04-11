@@ -75,6 +75,7 @@ export function OnboardingWizard({ userId, initialProfile, initialToolSettings }
       "notion_get_idea_tags",
       "notion_create_idea",
       "get_weather",
+      "bash",
     ];
 
     for (const toolId of TOOL_IDS) {

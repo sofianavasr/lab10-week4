@@ -5,6 +5,7 @@ import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { TOOL_CATALOG, toolRequiresConfirmation } from "./catalog";
 import { createToolCall, updateToolCallStatus } from "@agents/db";
+import { executeBashCommand } from "./bashExec";
 
 interface ToolContext {
   db: DbClient;
@@ -522,6 +523,46 @@ export function buildLangChainTools(ctx: ToolContext) {
           description: "Gets the current weather for a given city using the Open-Meteo API.",
           schema: z.object({
             city: z.string(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("bash", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("bash");
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "bash", input, needsConfirm
+          );
+          if (needsConfirm) {
+            const promptPreview =
+              input.prompt.length > 200 ? `${input.prompt.slice(0, 200)}...` : input.prompt;
+            const decision = interrupt({
+              tool_call_id: record.id,
+              tool_name: "bash",
+              arguments: input,
+              message: `Se va a ejecutar en terminal "${input.terminal}": \`${promptPreview}\`. ¿Aprobar?`,
+            });
+            if (decision === "reject") {
+              await updateToolCallStatus(ctx.db, record.id, "rejected");
+              return JSON.stringify({ rejected: true, message: "Acción cancelada por el usuario." });
+            }
+          }
+
+          const result = await executeBashCommand(input.prompt, input.terminal);
+          const status = result.error ? "failed" : "executed";
+          await updateToolCallStatus(ctx.db, record.id, status, { ...result });
+          return JSON.stringify(result);
+        },
+        {
+          name: "bash",
+          description: "Executes a shell command on the server host. Requires confirmation.",
+          schema: z.object({
+            terminal: z.string().max(64).optional().default("default"),
+            prompt: z.string().min(1).max(8192),
           }),
         }
       )
