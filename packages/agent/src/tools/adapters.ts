@@ -6,6 +6,7 @@ import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { TOOL_CATALOG, toolRequiresConfirmation } from "./catalog";
 import { createToolCall, updateToolCallStatus } from "@agents/db";
 import { executeBashCommand } from "./bashExec";
+import { readFileOp, writeFileOp, editFileOp } from "./fileOps";
 
 interface ToolContext {
   db: DbClient;
@@ -523,6 +524,111 @@ export function buildLangChainTools(ctx: ToolContext) {
           description: "Gets the current weather for a given city using the Open-Meteo API.",
           schema: z.object({
             city: z.string(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("read_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const record = await createToolCall(ctx.db, ctx.sessionId, "read_file", input, false);
+          const result = await readFileOp(input.path, input.offset, input.limit);
+          const status = result.success ? "executed" : "failed";
+          await updateToolCallStatus(ctx.db, record.id, status, { ...result });
+          return JSON.stringify(result);
+        },
+        {
+          name: "read_file",
+          description:
+            "Reads the contents of a file from disk and returns its text. " +
+            "Use this tool when you need to inspect, analyze, or reference the content of an existing file. " +
+            "The path is resolved relative to the workspace root. " +
+            "You may optionally specify an offset (1-based line number to start from) and a limit (maximum number of lines to return) to read a specific section instead of the entire file. " +
+            "Returns a JSON object with: success (boolean), path (resolved absolute path), content (the file text or the requested slice), and lines_read (number of lines returned). " +
+            "If the file does not exist, is a directory, or cannot be read, returns success=false with an error field describing the problem.",
+          schema: z.object({
+            path: z.string().min(1),
+            offset: z.number().int().min(1).optional(),
+            limit: z.number().int().min(1).optional(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("write_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const record = await createToolCall(ctx.db, ctx.sessionId, "write_file", input, false);
+          const result = await writeFileOp(input.path, input.content);
+          const status = result.success ? "executed" : "failed";
+          await updateToolCallStatus(ctx.db, record.id, status, { ...result });
+          return JSON.stringify(result);
+        },
+        {
+          name: "write_file",
+          description:
+            "Creates a new file on disk with the provided content. " +
+            "Use this tool ONLY to create files that do not yet exist. If the file already exists, this tool will fail — use edit_file instead to modify existing files. " +
+            "The path is resolved relative to the workspace root. The parent directory must already exist. " +
+            "Returns a JSON object with: success (boolean), path (resolved absolute path), and bytes_written (number of bytes written). " +
+            "If the file already exists, the parent directory is missing, or the write fails, returns success=false with an error field describing the problem.",
+          schema: z.object({
+            path: z.string().min(1),
+            content: z.string(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("edit_file", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          const needsConfirm = toolRequiresConfirmation("edit_file");
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "edit_file", input, needsConfirm
+          );
+          if (needsConfirm) {
+            const preview =
+              input.old_string.length > 80
+                ? `${input.old_string.slice(0, 80)}...`
+                : input.old_string;
+            const decision = interrupt({
+              tool_call_id: record.id,
+              tool_name: "edit_file",
+              arguments: input,
+              message: `Se va a editar el archivo "${input.path}". ¿Aprobar?`,
+            });
+            if (decision === "reject") {
+              await updateToolCallStatus(ctx.db, record.id, "rejected");
+              return JSON.stringify({ rejected: true, message: "Acción cancelada por el usuario." });
+            }
+          }
+          const result = await editFileOp(input.path, input.old_string, input.new_string);
+          const status = result.success ? "executed" : "failed";
+          await updateToolCallStatus(ctx.db, record.id, status, { ...result });
+          return JSON.stringify(result);
+        },
+        {
+          name: "edit_file",
+          description:
+            "Modifies an existing file by finding and replacing a specific text fragment. " +
+            "Use this tool to make targeted changes to files that already exist on disk. " +
+            "Provide the exact text to find (old_string) and the text to replace it with (new_string). Only the first occurrence of old_string is replaced. " +
+            "The path is resolved relative to the workspace root. " +
+            "Requires user confirmation before executing. " +
+            "Returns a JSON object with: success (boolean), path (resolved absolute path), and replacements (number of replacements made, always 1 on success). " +
+            "If the file does not exist, use write_file instead. If old_string is not found in the file, returns success=false with an error field explaining that no match was found and no changes were made.",
+          schema: z.object({
+            path: z.string().min(1),
+            old_string: z.string().min(1),
+            new_string: z.string(),
           }),
         }
       )
