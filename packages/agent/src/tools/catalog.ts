@@ -124,6 +124,68 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     },
   },
   {
+    id: "read_file",
+    name: "read_file",
+    description:
+      "Reads the contents of a file from disk and returns its text. " +
+      "Use this tool when you need to inspect, analyze, or reference the content of an existing file. " +
+      "The path is resolved relative to the workspace root. " +
+      "You may optionally specify an offset (1-based line number to start from) and a limit (maximum number of lines to return) to read a specific section instead of the entire file. " +
+      "Returns a JSON object with: success (boolean), path (resolved absolute path), content (the file text or the requested slice), and lines_read (number of lines returned). " +
+      "If the file does not exist, is a directory, or cannot be read, returns success=false with an error field describing the problem.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path relative to the workspace root, or an absolute path within the workspace" },
+        offset: { type: "number", description: "1-based line number to start reading from. Defaults to 1 (beginning of file)" },
+        limit: { type: "number", description: "Maximum number of lines to return. If omitted, returns all lines from offset to end of file" },
+      },
+      required: ["path"],
+    },
+  },
+  {
+    id: "write_file",
+    name: "write_file",
+    description:
+      "Creates a new file on disk with the provided content. " +
+      "Use this tool ONLY to create files that do not yet exist. If the file already exists, this tool will fail — use edit_file instead to modify existing files. " +
+      "The path is resolved relative to the workspace root. The parent directory must already exist. " +
+      "Returns a JSON object with: success (boolean), path (resolved absolute path), and bytes_written (number of bytes written). " +
+      "If the file already exists, the parent directory is missing, or the write fails, returns success=false with an error field describing the problem.",
+    risk: "low",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "File path for the new file, relative to the workspace root or absolute within the workspace" },
+        content: { type: "string", description: "Full text content to write into the new file" },
+      },
+      required: ["path", "content"],
+    },
+  },
+  {
+    id: "edit_file",
+    name: "edit_file",
+    description:
+      "Modifies an existing file by finding and replacing a specific text fragment. " +
+      "Use this tool to make targeted changes to files that already exist on disk. " +
+      "Provide the exact text to find (old_string) and the text to replace it with (new_string). Only the first occurrence of old_string is replaced. " +
+      "The path is resolved relative to the workspace root. " +
+      "Requires user confirmation before executing. " +
+      "Returns a JSON object with: success (boolean), path (resolved absolute path), and replacements (number of replacements made, always 1 on success). " +
+      "If the file does not exist, use write_file instead. If old_string is not found in the file, returns success=false with an error field explaining that no match was found and no changes were made.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Path of the existing file to edit, relative to workspace root or absolute within the workspace" },
+        old_string: { type: "string", description: "Exact text fragment to search for in the file. Must match exactly (case-sensitive, including whitespace)" },
+        new_string: { type: "string", description: "Text that will replace the first occurrence of old_string" },
+      },
+      required: ["path", "old_string", "new_string"],
+    },
+  },
+  {
     id: "bash",
     name: "bash",
     description: "Executes a shell command on the server host. Requires confirmation.",

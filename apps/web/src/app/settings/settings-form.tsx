@@ -24,6 +24,9 @@ const TOOL_IDS = [
   "notion_create_idea",
   "get_weather",
   "bash",
+  "read_file",
+  "write_file",
+  "edit_file",
 ];
 
 export function SettingsForm({
