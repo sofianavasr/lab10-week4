@@ -71,6 +71,13 @@ const AVAILABLE_TOOLS = [
     risk: "low" as const,
     requiresIntegration: null,
   },
+  {
+    id: "bash",
+    name: "Terminal (Bash)",
+    description: "Ejecuta comandos en el servidor. Riesgo alto: requiere confirmación.",
+    risk: "high" as const,
+    requiresIntegration: null,
+  },
 ];
 
 const RISK_LABELS = {

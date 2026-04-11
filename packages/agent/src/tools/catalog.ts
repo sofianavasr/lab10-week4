@@ -123,6 +123,26 @@ export const TOOL_CATALOG: ToolDefinition[] = [
       required: ["city"],
     },
   },
+  {
+    id: "bash",
+    name: "bash",
+    description: "Executes a shell command on the server host. Requires confirmation.",
+    risk: "high",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        terminal: {
+          type: "string",
+          description: "Logical terminal identifier for correlation/logs",
+        },
+        prompt: {
+          type: "string",
+          description: "Shell command to execute via bash -lc",
+        },
+      },
+      required: ["prompt"],
+    },
+  },
 ];
 
 export function getToolRisk(toolId: string): ToolRisk {

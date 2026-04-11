@@ -277,6 +277,28 @@ export async function POST(request: Request) {
 
   const userId = telegramAccount.user_id;
 
+  if (command === "/new") {
+    const { data: newSession } = await db
+      .from("agent_sessions")
+      .insert({
+        user_id: userId,
+        channel: "telegram",
+        status: "active",
+        budget_tokens_used: 0,
+        budget_tokens_limit: 100000,
+      })
+      .select()
+      .single();
+
+    if (!newSession) {
+      await sendTelegramMessage(chatId, "Error creando sesion.");
+      return NextResponse.json({ ok: true });
+    }
+
+    await sendTelegramMessage(chatId, "Nueva sesion creada. Ya puedes chatear.");
+    return NextResponse.json({ ok: true });
+  }
+
   let session = await db
     .from("agent_sessions")
     .select("*")
