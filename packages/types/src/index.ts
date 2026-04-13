@@ -89,3 +89,15 @@ export interface PendingConfirmation {
   arguments: Record<string, unknown>;
   message: string;
 }
+
+export interface Cronjob {
+  id: string;
+  user_id: string;
+  jobname: string;
+  description: string;
+  expression: string;
+  active: boolean;
+  run_once: boolean;
+  last_executed_at: string | null;
+  created_at: string;
+}
