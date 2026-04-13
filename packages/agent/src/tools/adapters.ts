@@ -1,10 +1,11 @@
 import { tool } from "@langchain/core/tools";
 import { z } from "zod";
 import { interrupt } from "@langchain/langgraph";
+import { CronExpressionParser } from "cron-parser";
 import type { DbClient } from "@agents/db";
 import type { UserToolSetting, UserIntegration } from "@agents/types";
 import { TOOL_CATALOG, toolRequiresConfirmation } from "./catalog";
-import { createToolCall, updateToolCallStatus } from "@agents/db";
+import { createToolCall, updateToolCallStatus, createCronjob } from "@agents/db";
 import { executeBashCommand } from "./bashExec";
 import { readFileOp, writeFileOp, editFileOp } from "./fileOps";
 
@@ -629,6 +630,89 @@ export function buildLangChainTools(ctx: ToolContext) {
             path: z.string().min(1),
             old_string: z.string().min(1),
             new_string: z.string(),
+          }),
+        }
+      )
+    );
+  }
+
+  if (isToolAvailable("create_cronjob", ctx)) {
+    tools.push(
+      tool(
+        async (input) => {
+          // Validate that the expression will fire in the future.
+          // For run_once jobs we're stricter: if the next occurrence is not
+          // today it means the requested time has already passed today.
+          try {
+            const now = new Date();
+            const interval = CronExpressionParser.parse(input.expression, { currentDate: now });
+            const nextFire = interval.next().toDate();
+
+            if (input.run_once) {
+              const todayStart = new Date(now);
+              todayStart.setHours(0, 0, 0, 0);
+              const todayEnd = new Date(now);
+              todayEnd.setHours(23, 59, 59, 999);
+
+              if (nextFire < todayStart || nextFire > todayEnd) {
+                const nextStr = nextFire.toLocaleString("es-ES", {
+                  dateStyle: "short",
+                  timeStyle: "short",
+                });
+                return JSON.stringify({
+                  error: true,
+                  message:
+                    `La hora especificada ya pasó. La próxima ejecución sería el ${nextStr}. ` +
+                    `Por favor, elige una hora futura dentro del día de hoy o usa una expresión recurrente.`,
+                });
+              }
+            }
+          } catch {
+            return JSON.stringify({
+              error: true,
+              message: `La expresión cron "${input.expression}" no es válida. Por favor, usa una expresión correcta.`,
+            });
+          }
+
+          const needsConfirm = toolRequiresConfirmation("create_cronjob");
+          const record = await createToolCall(
+            ctx.db, ctx.sessionId, "create_cronjob", input, needsConfirm
+          );
+          if (needsConfirm) {
+            const decision = interrupt({
+              tool_call_id: record.id,
+              tool_name: "create_cronjob",
+              arguments: input,
+              message: `Quieres programar la tarea "${input.jobname}" con la expresión \`${input.expression}\`${input.run_once ? " (se ejecutará una sola vez)" : ""}?`,
+            });
+            if (decision === "reject") {
+              await updateToolCallStatus(ctx.db, record.id, "rejected");
+              return JSON.stringify({ rejected: true, message: "Tarea programada cancelada." });
+            }
+          }
+          const cronjob = await createCronjob(
+            ctx.db, ctx.userId, input.jobname, input.description, input.expression, input.run_once ?? false
+          );
+          const result = {
+            message: `Tarea programada "${cronjob.jobname}" creada correctamente (expresión: ${cronjob.expression}).`,
+            id: cronjob.id,
+            jobname: cronjob.jobname,
+            expression: cronjob.expression,
+          };
+          await updateToolCallStatus(ctx.db, record.id, "executed", result);
+          return JSON.stringify(result);
+        },
+        {
+          name: "create_cronjob",
+          description:
+            "Creates a scheduled task that will run automatically on the given cron schedule. " +
+            "When fired, the agent will execute the provided description as a prompt and notify the user via Telegram. " +
+            "Requires confirmation before saving.",
+          schema: z.object({
+            jobname: z.string().min(1).describe("Short human-readable name for the job"),
+            description: z.string().min(1).describe("Prompt the agent will run each time the job fires"),
+            expression: z.string().min(1).describe("Cron expression (e.g. '0 9 * * 1' for Mondays at 9am UTC)"),
+            run_once: z.boolean().optional().describe("If true, deactivate the job after its first execution. Use for one-off tasks."),
           }),
         }
       )

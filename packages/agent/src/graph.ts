@@ -202,8 +202,19 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
 
   await addMessage(db, sessionId, "user", message);
 
+  const currentDate = new Date().toLocaleDateString("es-ES", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const fullSystemPrompt = `${systemPrompt}\n\nFecha actual: ${currentDate}.`;
+
   const initialMessages: BaseMessage[] = [
-    new SystemMessage(systemPrompt),
+    new SystemMessage(fullSystemPrompt),
     ...priorMessages,
     new HumanMessage(message),
   ];

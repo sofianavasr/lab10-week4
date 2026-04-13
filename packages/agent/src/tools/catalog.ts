@@ -186,6 +186,38 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     },
   },
   {
+    id: "create_cronjob",
+    name: "create_cronjob",
+    description:
+      "Creates a scheduled task that will run automatically on the given cron schedule. " +
+      "When fired, the agent will execute the provided description as a prompt and notify the user via Telegram. " +
+      "Use run_once: true for one-off tasks (e.g. 'remind me at 18:30 today') — the job will be deactivated automatically after its first execution. " +
+      "Requires confirmation before saving.",
+    risk: "medium",
+    parameters_schema: {
+      type: "object",
+      properties: {
+        jobname: {
+          type: "string",
+          description: "Short human-readable name for the scheduled job (e.g. 'Weekly issue review')",
+        },
+        description: {
+          type: "string",
+          description: "The prompt the agent will run each time the job fires (e.g. 'List open GitHub issues in owner/repo')",
+        },
+        expression: {
+          type: "string",
+          description: "Cron expression defining the schedule (e.g. '0 9 * * 1' for every Monday at 9am UTC)",
+        },
+        run_once: {
+          type: "boolean",
+          description: "If true, the job is automatically deactivated after its first execution. Use this for one-off tasks (e.g. a reminder at a specific time today).",
+        },
+      },
+      required: ["jobname", "description", "expression"],
+    },
+  },
+  {
     id: "bash",
     name: "bash",
     description: "Executes a shell command on the server host. Requires confirmation.",
