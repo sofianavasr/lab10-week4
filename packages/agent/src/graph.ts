@@ -1,4 +1,4 @@
-import { StateGraph, Annotation, Command } from "@langchain/langgraph";
+import { StateGraph, Command } from "@langchain/langgraph";
 import { PostgresSaver } from "@langchain/langgraph-checkpoint-postgres";
 import {
   HumanMessage,
@@ -11,16 +11,8 @@ import type { UserToolSetting, UserIntegration, PendingConfirmation } from "@age
 import { createChatModel } from "./model";
 import { buildLangChainTools } from "./tools/adapters";
 import { getSessionMessages, addMessage } from "@agents/db";
-
-const GraphState = Annotation.Root({
-  messages: Annotation<BaseMessage[]>({
-    reducer: (prev, next) => [...prev, ...next],
-    default: () => [],
-  }),
-  sessionId: Annotation<string>(),
-  userId: Annotation<string>(),
-  systemPrompt: Annotation<string>(),
-});
+import { GraphState } from "./state";
+import { compactionNode } from "./nodes/compaction_node";
 
 export interface AgentInput {
   message: string;
@@ -133,14 +125,16 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 
   const graph = new StateGraph(GraphState)
+    .addNode("compaction", compactionNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
-    .addEdge("__start__", "agent")
+    .addEdge("__start__", "compaction")
+    .addEdge("compaction", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",
       end: "__end__",
     })
-    .addEdge("tools", "agent");
+    .addEdge("tools", "compaction");
 
   const checkpointer = await getCheckpointer();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -220,7 +214,14 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   ];
 
   const finalState = await app.invoke(
-    { messages: initialMessages, sessionId, userId, systemPrompt },
+    {
+      messages: initialMessages,
+      sessionId,
+      userId,
+      systemPrompt,
+      compactionCount: 0,
+      compactionFailureStreak: 0,
+    },
     config
   );
 
