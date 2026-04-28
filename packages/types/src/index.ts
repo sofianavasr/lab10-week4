@@ -101,3 +101,15 @@ export interface Cronjob {
   last_executed_at: string | null;
   created_at: string;
 }
+
+export type MemoryType = "episodic" | "semantic" | "procedural";
+
+export interface Memory {
+  id: string;
+  user_id: string;
+  type: MemoryType;
+  content: string;
+  retrieval_count: number;
+  created_at: string;
+  last_retrieved_at: string | null;
+}

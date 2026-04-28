@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createServerClient } from "@agents/db";
-import { runAgent, resumeAgent } from "@agents/agent";
+import { runAgent, resumeAgent, flushSessionMemories } from "@agents/agent";
 import { decrypt } from "@/lib/crypto";
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN ?? "";
@@ -278,6 +278,42 @@ export async function POST(request: Request) {
   const userId = telegramAccount.user_id;
 
   if (command === "/new") {
+    const { data: activeSession } = await db
+      .from("agent_sessions")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("channel", "telegram")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (activeSession?.id) {
+      try {
+        const flushResult = await flushSessionMemories({
+          db,
+          userId,
+          sessionId: activeSession.id as string,
+        });
+        console.info("[telegram /new] memory flush done", {
+          userId,
+          sessionId: activeSession.id,
+          inserted: flushResult.inserted,
+        });
+      } catch (err) {
+        console.error("[telegram /new] memory flush failed", {
+          userId,
+          sessionId: activeSession.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      await db
+        .from("agent_sessions")
+        .update({ status: "closed", updated_at: new Date().toISOString() })
+        .eq("id", activeSession.id);
+    }
+
     const { data: newSession } = await db
       .from("agent_sessions")
       .insert({
