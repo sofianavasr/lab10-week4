@@ -13,6 +13,7 @@ import { buildLangChainTools } from "./tools/adapters";
 import { getSessionMessages, addMessage } from "@agents/db";
 import { GraphState } from "./state";
 import { compactionNode } from "./nodes/compaction_node";
+import { createMemoryInjectionNode } from "./nodes/memory_injection_node";
 
 export interface AgentInput {
   message: string;
@@ -79,6 +80,7 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   });
 
   const modelWithTools = lcTools.length > 0 ? model.bindTools(lcTools) : model;
+  const memoryInjectionNode = createMemoryInjectionNode(db);
 
   const toolCallNames: string[] = [];
 
@@ -125,10 +127,12 @@ export async function runAgent(input: AgentInput): Promise<AgentOutput> {
   }
 
   const graph = new StateGraph(GraphState)
+    .addNode("memory_injection", memoryInjectionNode)
     .addNode("compaction", compactionNode)
     .addNode("agent", agentNode)
     .addNode("tools", toolExecutorNode)
-    .addEdge("__start__", "compaction")
+    .addEdge("__start__", "memory_injection")
+    .addEdge("memory_injection", "compaction")
     .addEdge("compaction", "agent")
     .addConditionalEdges("agent", shouldContinue, {
       tools: "tools",
